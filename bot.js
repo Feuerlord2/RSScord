@@ -21,10 +21,10 @@ function cleanDescription(description) {
 
 // Konfiguration
 const CONFIG = {
-    token: process.env.DISCORD_TOKEN, // Dein Discord Bot Token
-    checkInterval: 5 * 60 * 1000, // 5 Minuten in Millisekunden
+    token: process.env.DISCORD_TOKEN,
+    checkInterval: 5 * 60 * 1000, // 5 Minuten
     dataFile: './feeds.json',
-    port: process.env.PORT || 3000 // Port für Render
+    port: process.env.PORT || 3000
 };
 
 // RSS Parser initialisieren
@@ -43,6 +43,9 @@ let feedsData = {
     feeds: [],
     lastItems: {}
 };
+
+// Feed-Checking Status
+let isCheckingFeeds = false;
 
 // Daten laden
 function loadData() {
@@ -65,12 +68,13 @@ function saveData() {
 }
 
 // RSS Feed hinzufügen
-function addFeed(url, channelId, guildId) {
+function addFeed(url, channelId, guildId, rolePing = null) {
     const feed = {
         id: Date.now().toString(),
         url,
         channelId,
         guildId,
+        rolePing,
         active: true,
         addedAt: new Date().toISOString()
     };
@@ -114,8 +118,8 @@ async function checkFeed(feed) {
         newItems.reverse();
         
         for (const item of newItems) {
-            await postItem(channel, item, parsedFeed.title);
-            await new Promise(resolve => setTimeout(resolve, 1000)); // 1 Sekunde warten zwischen Posts
+            await postItem(channel, item, parsedFeed.title, feed.rolePing);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // 2 Sekunden warten zwischen Posts
         }
         
         // Letztes Item speichern
@@ -130,7 +134,7 @@ async function checkFeed(feed) {
 }
 
 // Item in Discord posten
-async function postItem(channel, item, feedTitle) {
+async function postItem(channel, item, feedTitle, rolePing) {
     try {
         const embed = new EmbedBuilder()
             .setTitle(item.title || 'Kein Titel')
@@ -145,7 +149,13 @@ async function postItem(channel, item, feedTitle) {
             embed.setThumbnail(item.enclosure.url);
         }
 
-        await channel.send({ embeds: [embed] });
+        // Rolle pinnen falls konfiguriert
+        let content = null;
+        if (rolePing) {
+            content = `<@&${rolePing}>`;
+        }
+
+        await channel.send({ content, embeds: [embed] });
         console.log(`Neues Item gepostet: ${item.title} in #${channel.name}`);
         
     } catch (error) {
@@ -170,7 +180,7 @@ function createDashboard(guildId) {
         .setTimestamp();
 
     // Buttons erstellen
-    const buttons = new ActionRowBuilder()
+    const row1 = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
                 .setCustomId('add_feed')
@@ -183,14 +193,22 @@ function createDashboard(guildId) {
             new ButtonBuilder()
                 .setCustomId('test_feed')
                 .setLabel('🧪 Feed testen')
-                .setStyle(ButtonStyle.Success),
+                .setStyle(ButtonStyle.Success)
+        );
+
+    const row2 = new ActionRowBuilder()
+        .addComponents(
             new ButtonBuilder()
                 .setCustomId('remove_feed')
                 .setLabel('🗑️ Feed entfernen')
-                .setStyle(ButtonStyle.Danger)
+                .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+                .setCustomId('manage_roles')
+                .setLabel('🔔 Rollen verwalten')
+                .setStyle(ButtonStyle.Secondary)
         );
 
-    return { embeds: [embed], components: [buttons] };
+    return { embeds: [embed], components: [row1, row2] };
 }
 
 // Feed-Liste mit Select Menu erstellen
@@ -202,7 +220,16 @@ function createFeedList(guildId) {
             .setTitle('📋 RSS Feeds')
             .setDescription('Keine RSS Feeds konfiguriert.')
             .setColor(0xFF9900);
-        return { embeds: [embed], components: [] };
+        
+        const backButton = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('dashboard')
+                    .setLabel('🔙 Zurück zum Dashboard')
+                    .setStyle(ButtonStyle.Secondary)
+            );
+        
+        return { embeds: [embed], components: [backButton] };
     }
 
     const embed = new EmbedBuilder()
@@ -215,10 +242,11 @@ function createFeedList(guildId) {
         const channel = `<#${feed.channelId}>`;
         const status = feed.active ? '✅ Aktiv' : '❌ Inaktiv';
         const addedDate = new Date(feed.addedAt).toLocaleDateString('de-DE');
+        const rolePing = feed.rolePing ? `<@&${feed.rolePing}>` : 'Keine';
         
         embed.addFields({
             name: `Feed ${index + 1}`,
-            value: `**URL:** ${feed.url}\n**Channel:** ${channel}\n**Status:** ${status}\n**Hinzugefügt:** ${addedDate}\n**ID:** \`${feed.id}\``,
+            value: `**URL:** ${feed.url}\n**Channel:** ${channel}\n**Status:** ${status}\n**Rolle:** ${rolePing}\n**Hinzugefügt:** ${addedDate}\n**ID:** \`${feed.id}\``,
             inline: false
         });
     });
@@ -254,10 +282,18 @@ function createAddFeedModal() {
         .setPlaceholder('Leer lassen für aktuellen Channel')
         .setRequired(false);
 
+    const roleInput = new TextInputBuilder()
+        .setCustomId('role_ping')
+        .setLabel('Rolle zum Pingen (optional)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('@RollenName oder Rollen-ID')
+        .setRequired(false);
+
     const urlRow = new ActionRowBuilder().addComponents(urlInput);
     const channelRow = new ActionRowBuilder().addComponents(channelInput);
+    const roleRow = new ActionRowBuilder().addComponents(roleInput);
 
-    modal.addComponents(urlRow, channelRow);
+    modal.addComponents(urlRow, channelRow, roleRow);
     return modal;
 }
 
@@ -332,15 +368,130 @@ function createRemoveFeedMenu(guildId) {
     return { embeds: [embed], components: [selectRow, backButton] };
 }
 
+// Rollen-Management Menu
+function createRoleManagementMenu(guildId) {
+    const guildFeeds = feedsData.feeds.filter(f => f.guildId === guildId);
+    
+    if (guildFeeds.length === 0) {
+        const embed = new EmbedBuilder()
+            .setTitle('🔔 Rollen verwalten')
+            .setDescription('Keine Feeds zum Verwalten vorhanden.')
+            .setColor(0xFF9900);
+            
+        const backButton = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('dashboard')
+                    .setLabel('🔙 Zurück zum Dashboard')
+                    .setStyle(ButtonStyle.Secondary)
+            );
+            
+        return { embeds: [embed], components: [backButton] };
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle('🔔 Rollen verwalten')
+        .setDescription('Wähle einen Feed aus, um seine Rollen-Pings zu verwalten:')
+        .setColor(0x0099FF);
+
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('manage_role_select')
+        .setPlaceholder('Feed auswählen...')
+        .addOptions(
+            guildFeeds.map(feed => {
+                const url = feed.url.length > 50 ? feed.url.substring(0, 50) + '...' : feed.url;
+                const rolePing = feed.rolePing ? ' (🔔)' : '';
+                return {
+                    label: url + rolePing,
+                    description: `Channel: #${feed.channelId} | ID: ${feed.id}`,
+                    value: feed.id
+                };
+            })
+        );
+
+    const selectRow = new ActionRowBuilder().addComponents(selectMenu);
+    
+    const backButton = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('dashboard')
+                .setLabel('🔙 Zurück zum Dashboard')
+                .setStyle(ButtonStyle.Secondary)
+        );
+
+    return { embeds: [embed], components: [selectRow, backButton] };
+}
+
+// Modal für Rollen-Management
+function createRoleModal(feedId) {
+    const feed = feedsData.feeds.find(f => f.id === feedId);
+    if (!feed) return null;
+
+    const modal = new ModalBuilder()
+        .setCustomId(`role_modal_${feedId}`)
+        .setTitle('🔔 Rollen-Ping konfigurieren');
+
+    const roleInput = new TextInputBuilder()
+        .setCustomId('role_ping_input')
+        .setLabel('Rolle zum Pingen')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('@RollenName oder Rollen-ID (leer lassen zum Entfernen)')
+        .setValue(feed.rolePing || '')
+        .setRequired(false);
+
+    const roleRow = new ActionRowBuilder().addComponents(roleInput);
+    modal.addComponents(roleRow);
+    return modal;
+}
+
 // Alle aktiven Feeds prüfen
 async function checkAllFeeds() {
-    console.log(`Prüfe ${feedsData.feeds.length} Feeds...`);
+    if (isCheckingFeeds) {
+        console.log('Feed-Prüfung bereits im Gange, überspringe...');
+        return;
+    }
+
+    isCheckingFeeds = true;
+    const activeFeeds = feedsData.feeds.filter(f => f.active);
+    console.log(`Prüfe ${activeFeeds.length} aktive Feeds...`);
     
-    for (const feed of feedsData.feeds) {
-        if (feed.active) {
+    for (const feed of activeFeeds) {
+        try {
             await checkFeed(feed);
+            // Kleine Pause zwischen Feeds
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+            console.error(`Fehler beim Prüfen von Feed ${feed.id}:`, error);
         }
     }
+    
+    console.log('Feed-Prüfung abgeschlossen');
+    isCheckingFeeds = false;
+}
+
+// Rollen-ID aus Input parsen
+function parseRoleInput(input, guild) {
+    if (!input || input.trim() === '') return null;
+    
+    // Versuche direkte ID
+    const directId = input.match(/^\d+$/);
+    if (directId) {
+        const role = guild.roles.cache.get(directId[0]);
+        return role ? role.id : null;
+    }
+    
+    // Versuche Mention Format
+    const mentionMatch = input.match(/^<@&(\d+)>$/);
+    if (mentionMatch) {
+        const role = guild.roles.cache.get(mentionMatch[1]);
+        return role ? role.id : null;
+    }
+    
+    // Versuche Rollennamen
+    const roleByName = guild.roles.cache.find(role => 
+        role.name.toLowerCase() === input.toLowerCase()
+    );
+    return roleByName ? roleByName.id : null;
 }
 
 // Bot Events
@@ -348,8 +499,10 @@ client.once('ready', async () => {
     console.log(`Bot ist online als ${client.user.tag}`);
     loadData();
     
-    // Sofort alle Feeds prüfen
-    checkAllFeeds();
+    // Warte kurz bevor erste Prüfung
+    setTimeout(() => {
+        checkAllFeeds();
+    }, 5000);
     
     // Interval für regelmäßige Prüfung
     setInterval(checkAllFeeds, CONFIG.checkInterval);
@@ -357,65 +510,18 @@ client.once('ready', async () => {
     // Slash Commands registrieren
     const commands = [
         {
-            name: 'rss-add',
-            description: 'RSS Feed hinzufügen',
-            options: [
-                {
-                    name: 'url',
-                    type: 3, // STRING
-                    description: 'RSS Feed URL',
-                    required: true
-                },
-                {
-                    name: 'channel',
-                    type: 7, // CHANNEL
-                    description: 'Ziel-Channel (optional, aktueller Channel wird verwendet)',
-                    required: false
-                }
-            ]
-        },
-        {
-            name: 'rss-list',
-            description: 'Alle RSS Feeds anzeigen'
-        },
-        {
-            name: 'rss-remove',
-            description: 'RSS Feed entfernen',
-            options: [
-                {
-                    name: 'id',
-                    type: 3, // STRING
-                    description: 'Feed ID',
-                    required: true
-                }
-            ]
-        },
-        {
-            name: 'rss-test',
-            description: 'RSS Feed testen',
-            options: [
-                {
-                    name: 'url',
-                    type: 3, // STRING
-                    description: 'RSS Feed URL',
-                    required: true
-                }
-            ]
-        },
-        {
             name: 'rss-dashboard',
             description: '📊 RSS Dashboard mit Buttons öffnen'
         }
     ];
 
     try {
-        // Registriere Commands für alle Guilds (Server) wo der Bot ist
+        // Registriere Commands für alle Guilds
         for (const guild of client.guilds.cache.values()) {
             await guild.commands.set(commands);
             console.log(`Slash Commands registriert für Server: ${guild.name}`);
         }
         
-        // Zusätzlich auch global (dauert länger, aber als Backup)
         await client.application.commands.set(commands);
         console.log('Globale Slash Commands registriert');
     } catch (error) {
@@ -427,54 +533,7 @@ client.once('ready', async () => {
 client.on('guildCreate', async (guild) => {
     console.log(`Bot wurde zu neuem Server hinzugefügt: ${guild.name}`);
     
-    // Commands für neuen Server registrieren
     const commands = [
-        {
-            name: 'rss-add',
-            description: 'RSS Feed hinzufügen',
-            options: [
-                {
-                    name: 'url',
-                    type: 3,
-                    description: 'RSS Feed URL',
-                    required: true
-                },
-                {
-                    name: 'channel',
-                    type: 7,
-                    description: 'Ziel-Channel (optional)',
-                    required: false
-                }
-            ]
-        },
-        {
-            name: 'rss-list',
-            description: 'Alle RSS Feeds anzeigen'
-        },
-        {
-            name: 'rss-remove',
-            description: 'RSS Feed entfernen',
-            options: [
-                {
-                    name: 'id',
-                    type: 3,
-                    description: 'Feed ID',
-                    required: true
-                }
-            ]
-        },
-        {
-            name: 'rss-test',
-            description: 'RSS Feed testen',
-            options: [
-                {
-                    name: 'url',
-                    type: 3,
-                    description: 'RSS Feed URL',
-                    required: true
-                }
-            ]
-        },
         {
             name: 'rss-dashboard',
             description: '📊 RSS Dashboard mit Buttons öffnen'
@@ -493,110 +552,30 @@ client.on('guildCreate', async (guild) => {
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isCommand()) return;
 
-    const { commandName, options, member, guild, channel } = interaction;
+    const { commandName, member, guild } = interaction;
 
     // Permissions prüfen
     if (!member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
-        return interaction.reply({ content: 'Du benötigst die "Nachrichten verwalten" Berechtigung!', ephemeral: true });
+        return interaction.reply({ 
+            content: 'Du benötigst die "Nachrichten verwalten" Berechtigung!', 
+            flags: 64 // Ephemeral flag
+        });
     }
 
     try {
-        switch (commandName) {
-            case 'rss-dashboard':
-                const dashboardData = createDashboard(guild.id);
-                await interaction.reply(dashboardData);
-                break;
-
-            case 'rss-add':
-                const url = options.getString('url');
-                const targetChannel = options.getChannel('channel') || channel;
-                
-                // URL validieren
-                if (!url.startsWith('http')) {
-                    return interaction.reply({ content: 'Bitte gib eine gültige URL an!', ephemeral: true });
-                }
-                
-                // Prüfen ob Feed bereits existiert
-                const existingFeed = feedsData.feeds.find(f => f.url === url && f.channelId === targetChannel.id);
-                if (existingFeed) {
-                    return interaction.reply({ content: 'Dieser Feed existiert bereits in diesem Channel!', ephemeral: true });
-                }
-                
-                // Feed testen
-                await interaction.deferReply();
-                try {
-                    await parser.parseURL(url);
-                    const newFeed = addFeed(url, targetChannel.id, guild.id);
-                    await interaction.editReply(`✅ RSS Feed erfolgreich hinzugefügt!\n**URL:** ${url}\n**Channel:** <#${targetChannel.id}>\n**ID:** ${newFeed.id}`);
-                } catch (error) {
-                    await interaction.editReply(`❌ Fehler beim Hinzufügen des Feeds: ${error.message}`);
-                }
-                break;
-
-            case 'rss-list':
-                const guildFeeds = feedsData.feeds.filter(f => f.guildId === guild.id);
-                
-                if (guildFeeds.length === 0) {
-                    return interaction.reply({ content: 'Keine RSS Feeds konfiguriert.', ephemeral: true });
-                }
-                
-                const embed = new EmbedBuilder()
-                    .setTitle('RSS Feeds')
-                    .setColor(0x0099FF)
-                    .setDescription(guildFeeds.map(feed => 
-                        `**ID:** ${feed.id}\n**URL:** ${feed.url}\n**Channel:** <#${feed.channelId}>\n**Status:** ${feed.active ? '✅ Aktiv' : '❌ Inaktiv'}\n`
-                    ).join('\n'))
-                    .setFooter({ text: `${guildFeeds.length} Feed(s) total` });
-                
-                await interaction.reply({ embeds: [embed], ephemeral: true });
-                break;
-
-            case 'rss-remove':
-                const feedId = options.getString('id');
-                const feedToRemove = feedsData.feeds.find(f => f.id === feedId && f.guildId === guild.id);
-                
-                if (!feedToRemove) {
-                    return interaction.reply({ content: 'Feed nicht gefunden!', ephemeral: true });
-                }
-                
-                removeFeed(feedId);
-                await interaction.reply(`✅ RSS Feed entfernt: ${feedToRemove.url}`);
-                break;
-
-            case 'rss-test':
-                const testUrl = options.getString('url');
-                
-                if (!testUrl.startsWith('http')) {
-                    return interaction.reply({ content: 'Bitte gib eine gültige URL an!', ephemeral: true });
-                }
-                
-                await interaction.deferReply();
-                try {
-                    const testFeed = await parser.parseURL(testUrl);
-                    const latestItem = testFeed.items[0];
-                    
-                    const testEmbed = new EmbedBuilder()
-                        .setTitle('🧪 RSS Feed Test')
-                        .setColor(0x00FF00)
-                        .addFields(
-                            { name: 'Feed Titel', value: testFeed.title || 'Unbekannt', inline: true },
-                            { name: 'Items gefunden', value: testFeed.items.length.toString(), inline: true },
-                            { name: 'Letztes Item', value: latestItem ? latestItem.title : 'Keine Items', inline: false }
-                        )
-                        .setFooter({ text: 'Feed ist gültig und kann hinzugefügt werden' });
-                    
-                    await interaction.editReply({ embeds: [testEmbed] });
-                } catch (error) {
-                    await interaction.editReply(`❌ Feed-Test fehlgeschlagen: ${error.message}`);
-                }
-                break;
+        if (commandName === 'rss-dashboard') {
+            const dashboardData = createDashboard(guild.id);
+            await interaction.reply(dashboardData);
         }
     } catch (error) {
         console.error('Fehler beim Ausführen des Commands:', error);
         if (interaction.deferred) {
             await interaction.editReply('❌ Ein Fehler ist aufgetreten!');
         } else {
-            await interaction.reply({ content: '❌ Ein Fehler ist aufgetreten!', ephemeral: true });
+            await interaction.reply({ 
+                content: '❌ Ein Fehler ist aufgetreten!', 
+                flags: 64 
+            });
         }
     }
 });
@@ -607,7 +586,10 @@ client.on('interactionCreate', async (interaction) => {
 
     // Permissions prüfen für alle Interaktionen
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
-        return interaction.reply({ content: 'Du benötigst die "Nachrichten verwalten" Berechtigung!', ephemeral: true });
+        return interaction.reply({ 
+            content: 'Du benötigst die "Nachrichten verwalten" Berechtigung!', 
+            flags: 64 
+        });
     }
 
     try {
@@ -621,7 +603,7 @@ client.on('interactionCreate', async (interaction) => {
 
                 case 'list_feeds':
                     const feedList = createFeedList(interaction.guild.id);
-                    await interaction.reply({ ...feedList, ephemeral: true });
+                    await interaction.reply({ ...feedList, flags: 64 });
                     break;
 
                 case 'test_feed':
@@ -631,7 +613,12 @@ client.on('interactionCreate', async (interaction) => {
 
                 case 'remove_feed':
                     const removeMenu = createRemoveFeedMenu(interaction.guild.id);
-                    await interaction.reply({ ...removeMenu, ephemeral: true });
+                    await interaction.reply({ ...removeMenu, flags: 64 });
+                    break;
+
+                case 'manage_roles':
+                    const roleMenu = createRoleManagementMenu(interaction.guild.id);
+                    await interaction.reply({ ...roleMenu, flags: 64 });
                     break;
 
                 case 'dashboard':
@@ -643,83 +630,141 @@ client.on('interactionCreate', async (interaction) => {
 
         // Modal Interactions
         if (interaction.isModalSubmit()) {
-            switch (interaction.customId) {
-                case 'add_feed_modal':
-                    const feedUrl = interaction.fields.getTextInputValue('feed_url');
-                    const channelInput = interaction.fields.getTextInputValue('target_channel');
-                    
-                    let targetChannel = interaction.channel;
-                    
-                    // Channel parsing
-                    if (channelInput) {
-                        const channelMatch = channelInput.match(/^<#(\d+)>$/) || channelInput.match(/^(\d+)$/);
-                        if (channelMatch) {
-                            const foundChannel = interaction.guild.channels.cache.get(channelMatch[1]);
-                            if (foundChannel) {
-                                targetChannel = foundChannel;
-                            }
+            if (interaction.customId === 'add_feed_modal') {
+                const feedUrl = interaction.fields.getTextInputValue('feed_url');
+                const channelInput = interaction.fields.getTextInputValue('target_channel');
+                const roleInput = interaction.fields.getTextInputValue('role_ping');
+                
+                let targetChannel = interaction.channel;
+                
+                // Channel parsing
+                if (channelInput) {
+                    const channelMatch = channelInput.match(/^<#(\d+)>$/) || channelInput.match(/^(\d+)$/);
+                    if (channelMatch) {
+                        const foundChannel = interaction.guild.channels.cache.get(channelMatch[1]);
+                        if (foundChannel) {
+                            targetChannel = foundChannel;
                         }
                     }
+                }
+                
+                // Rolle parsing
+                let rolePing = null;
+                if (roleInput) {
+                    rolePing = parseRoleInput(roleInput, interaction.guild);
+                }
+                
+                if (!feedUrl.startsWith('http')) {
+                    return interaction.reply({ 
+                        content: '❌ Bitte gib eine gültige URL an!', 
+                        flags: 64 
+                    });
+                }
+                
+                const existingFeed = feedsData.feeds.find(f => f.url === feedUrl && f.channelId === targetChannel.id);
+                if (existingFeed) {
+                    return interaction.reply({ 
+                        content: '❌ Dieser Feed existiert bereits in diesem Channel!', 
+                        flags: 64 
+                    });
+                }
+                
+                await interaction.deferReply({ flags: 64 });
+                
+                try {
+                    await parser.parseURL(feedUrl);
+                    const newFeed = addFeed(feedUrl, targetChannel.id, interaction.guild.id, rolePing);
                     
-                    if (!feedUrl.startsWith('http')) {
-                        return interaction.reply({ content: '❌ Bitte gib eine gültige URL an!', ephemeral: true });
-                    }
-                    
-                    const existingFeed = feedsData.feeds.find(f => f.url === feedUrl && f.channelId === targetChannel.id);
-                    if (existingFeed) {
-                        return interaction.reply({ content: '❌ Dieser Feed existiert bereits in diesem Channel!', ephemeral: true });
-                    }
-                    
-                    await interaction.deferReply({ ephemeral: true });
-                    
-                    try {
-                        await parser.parseURL(feedUrl);
-                        const newFeed = addFeed(feedUrl, targetChannel.id, interaction.guild.id);
+                    const successEmbed = new EmbedBuilder()
+                        .setTitle('✅ Feed erfolgreich hinzugefügt')
+                        .setColor(0x00FF00)
+                        .addFields(
+                            { name: 'URL', value: feedUrl, inline: false },
+                            { name: 'Channel', value: `<#${targetChannel.id}>`, inline: true },
+                            { name: 'Rolle', value: rolePing ? `<@&${rolePing}>` : 'Keine', inline: true },
+                            { name: 'Feed ID', value: newFeed.id, inline: true }
+                        )
+                        .setTimestamp();
                         
-                        const successEmbed = new EmbedBuilder()
-                            .setTitle('✅ Feed erfolgreich hinzugefügt')
-                            .setColor(0x00FF00)
-                            .addFields(
-                                { name: 'URL', value: feedUrl, inline: false },
-                                { name: 'Channel', value: `<#${targetChannel.id}>`, inline: true },
-                                { name: 'Feed ID', value: newFeed.id, inline: true }
-                            )
-                            .setTimestamp();
-                            
-                        await interaction.editReply({ embeds: [successEmbed] });
-                    } catch (error) {
-                        await interaction.editReply({ content: `❌ Fehler beim Hinzufügen des Feeds: ${error.message}` });
-                    }
-                    break;
-
-                case 'test_feed_modal':
-                    const testUrl = interaction.fields.getTextInputValue('test_url');
+                    await interaction.editReply({ embeds: [successEmbed] });
+                } catch (error) {
+                    await interaction.editReply({ 
+                        content: `❌ Fehler beim Hinzufügen des Feeds: ${error.message}` 
+                    });
+                }
+            }
+            
+            else if (interaction.customId === 'test_feed_modal') {
+                const testUrl = interaction.fields.getTextInputValue('test_url');
+                
+                if (!testUrl.startsWith('http')) {
+                    return interaction.reply({ 
+                        content: '❌ Bitte gib eine gültige URL an!', 
+                        flags: 64 
+                    });
+                }
+                
+                await interaction.deferReply({ flags: 64 });
+                
+                try {
+                    const testFeed = await parser.parseURL(testUrl);
+                    const latestItem = testFeed.items[0];
                     
-                    if (!testUrl.startsWith('http')) {
-                        return interaction.reply({ content: '❌ Bitte gib eine gültige URL an!', ephemeral: true });
-                    }
+                    const testEmbed = new EmbedBuilder()
+                        .setTitle('🧪 RSS Feed Test')
+                        .setColor(0x00FF00)
+                        .addFields(
+                            { name: 'Feed Titel', value: testFeed.title || 'Unbekannt', inline: false },
+                            { name: 'Items gefunden', value: testFeed.items.length.toString(), inline: true },
+                            { name: 'Letztes Item', value: latestItem ? latestItem.title : 'Keine Items', inline: true }
+                        )
+                        .setFooter({ text: 'Feed ist gültig und kann hinzugefügt werden' });
                     
-                    await interaction.deferReply({ ephemeral: true });
-                    
-                    try {
-                        const testFeed = await parser.parseURL(testUrl);
-                        const latestItem = testFeed.items[0];
-                        
-                        const testEmbed = new EmbedBuilder()
-                            .setTitle('🧪 RSS Feed Test')
-                            .setColor(0x00FF00)
-                            .addFields(
-                                { name: 'Feed Titel', value: testFeed.title || 'Unbekannt', inline: false },
-                                { name: 'Items gefunden', value: testFeed.items.length.toString(), inline: true },
-                                { name: 'Letztes Item', value: latestItem ? latestItem.title : 'Keine Items', inline: true }
-                            )
-                            .setFooter({ text: 'Feed ist gültig und kann hinzugefügt werden' });
-                        
-                        await interaction.editReply({ embeds: [testEmbed] });
-                    } catch (error) {
-                        await interaction.editReply({ content: `❌ Feed-Test fehlgeschlagen: ${error.message}` });
+                    await interaction.editReply({ embeds: [testEmbed] });
+                } catch (error) {
+                    await interaction.editReply({ 
+                        content: `❌ Feed-Test fehlgeschlagen: ${error.message}` 
+                    });
+                }
+            }
+            
+            else if (interaction.customId.startsWith('role_modal_')) {
+                const feedId = interaction.customId.replace('role_modal_', '');
+                const roleInput = interaction.fields.getTextInputValue('role_ping_input');
+                
+                const feed = feedsData.feeds.find(f => f.id === feedId);
+                if (!feed) {
+                    return interaction.reply({ 
+                        content: '❌ Feed nicht gefunden!', 
+                        flags: 64 
+                    });
+                }
+                
+                let rolePing = null;
+                if (roleInput && roleInput.trim() !== '') {
+                    rolePing = parseRoleInput(roleInput, interaction.guild);
+                    if (!rolePing) {
+                        return interaction.reply({ 
+                            content: '❌ Rolle nicht gefunden!', 
+                            flags: 64 
+                        });
                     }
-                    break;
+                }
+                
+                // Feed updaten
+                feed.rolePing = rolePing;
+                saveData();
+                
+                const embed = new EmbedBuilder()
+                    .setTitle('✅ Rollen-Ping konfiguriert')
+                    .setColor(0x00FF00)
+                    .addFields(
+                        { name: 'Feed URL', value: feed.url, inline: false },
+                        { name: 'Rolle', value: rolePing ? `<@&${rolePing}>` : 'Entfernt', inline: true }
+                    )
+                    .setTimestamp();
+                
+                await interaction.reply({ embeds: [embed], flags: 64 });
             }
         }
 
@@ -730,7 +775,10 @@ client.on('interactionCreate', async (interaction) => {
                     const feedToRemove = feedsData.feeds.find(f => f.id === interaction.values[0]);
                     
                     if (!feedToRemove) {
-                        return interaction.reply({ content: '❌ Feed nicht gefunden!', ephemeral: true });
+                        return interaction.reply({ 
+                            content: '❌ Feed nicht gefunden!', 
+                            flags: 64 
+                        });
                     }
                     
                     removeFeed(interaction.values[0]);
@@ -741,39 +789,9 @@ client.on('interactionCreate', async (interaction) => {
                         .setColor(0xFF4444)
                         .setTimestamp();
                     
-                    await interaction.reply({ embeds: [removeEmbed], ephemeral: true });
+                    await interaction.reply({ embeds: [removeEmbed], flags: 64 });
                     break;
-            }
-        }
-    } catch (error) {
-        console.error('Fehler bei Button/Modal Interaction:', error);
-        if (interaction.deferred) {
-            await interaction.editReply('❌ Ein Fehler ist aufgetreten!');
-        } else {
-            await interaction.reply({ content: '❌ Ein Fehler ist aufgetreten!', ephemeral: true });
-        }
-    }
-});
 
-// Fehlerbehandlung
-client.on('error', error => {
-    console.error('Discord Client Fehler:', error);
-});
-
-process.on('unhandledRejection', error => {
-    console.error('Unhandled Promise Rejection:', error);
-});
-
-// Bot starten
-client.login(CONFIG.token);
-
-// Einfacher HTTP Server für Render (damit es als Web Service läuft)
-const app = express();
-
-app.get('/', (req, res) => {
-    res.send('Discord RSS Bot ist online!');
-});
-
-app.listen(CONFIG.port, () => {
-    console.log(`HTTP Server läuft auf Port ${CONFIG.port}`);
-});
+                case 'manage_role_select':
+                    const feedId = interaction.values[0];
+                    const
