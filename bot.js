@@ -1,4 +1,10 @@
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, ComponentType // Beschreibung bereinigen
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, ComponentType } = require('discord.js');
+const Parser = require('rss-parser');
+const fs = require('fs');
+const path = require('path');
+const express = require('express');
+
+// Beschreibung bereinigen
 function cleanDescription(description) {
     if (!description) return 'Keine Beschreibung verfügbar';
     
@@ -11,10 +17,7 @@ function cleanDescription(description) {
     }
     
     return cleaned;
-} = require('discord.js');
-const Parser = require('rss-parser');
-const fs = require('fs');
-const path = require('path');
+}
 
 // Konfiguration
 const CONFIG = {
@@ -43,17 +46,6 @@ let feedsData = {
 
 // Daten laden
 function loadData() {
-// Slash Command Handler
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isCommand()) return;
-
-    const { commandName, options, member, guild, channel } = interaction;
-
-    // Permissions prüfen
-    if (!member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
-        return interaction.reply({ content: 'Du benötigst die "Nachrichten verwalten" Berechtigung!', ephemeral: true });
-    }
-
     try {
         if (fs.existsSync(CONFIG.dataFile)) {
             feedsData = JSON.parse(fs.readFileSync(CONFIG.dataFile, 'utf8'));
@@ -352,7 +344,7 @@ async function checkAllFeeds() {
 }
 
 // Bot Events
-client.once('ready', () => {
+client.once('ready', async () => {
     console.log(`Bot ist online als ${client.user.tag}`);
     loadData();
     
@@ -361,72 +353,8 @@ client.once('ready', () => {
     
     // Interval für regelmäßige Prüfung
     setInterval(checkAllFeeds, CONFIG.checkInterval);
-});
-
-// Event für neue Server
-client.on('guildCreate', async (guild) => {
-    console.log(`Bot wurde zu neuem Server hinzugefügt: ${guild.name}`);
     
-    // Commands für neuen Server registrieren
-    const commands = [
-        {
-            name: 'rss-add',
-            description: 'RSS Feed hinzufügen',
-            options: [
-                {
-                    name: 'url',
-                    type: 3,
-                    description: 'RSS Feed URL',
-                    required: true
-                },
-                {
-                    name: 'channel',
-                    type: 7,
-                    description: 'Ziel-Channel (optional)',
-                    required: false
-                }
-            ]
-        },
-        {
-            name: 'rss-list',
-            description: 'Alle RSS Feeds anzeigen'
-        },
-        {
-            name: 'rss-remove',
-            description: 'RSS Feed entfernen',
-            options: [
-                {
-                    name: 'id',
-                    type: 3,
-                    description: 'Feed ID',
-                    required: true
-                }
-            ]
-        },
-        {
-            name: 'rss-test',
-            description: 'RSS Feed testen',
-            options: [
-                {
-                    name: 'url',
-                    type: 3,
-                    description: 'RSS Feed URL',
-                    required: true
-                }
-            ]
-        }
-    ];
-    
-    try {
-        await guild.commands.set(commands);
-        console.log(`Commands für ${guild.name} registriert`);
-    } catch (error) {
-        console.error('Fehler beim Registrieren der Guild Commands:', error);
-    }
-});
-
-// Slash Commands registrieren
-client.once('ready', async () => {
+    // Slash Commands registrieren
     const commands = [
         {
             name: 'rss-add',
@@ -492,6 +420,184 @@ client.once('ready', async () => {
         console.log('Globale Slash Commands registriert');
     } catch (error) {
         console.error('Fehler beim Registrieren der Commands:', error);
+    }
+});
+
+// Event für neue Server
+client.on('guildCreate', async (guild) => {
+    console.log(`Bot wurde zu neuem Server hinzugefügt: ${guild.name}`);
+    
+    // Commands für neuen Server registrieren
+    const commands = [
+        {
+            name: 'rss-add',
+            description: 'RSS Feed hinzufügen',
+            options: [
+                {
+                    name: 'url',
+                    type: 3,
+                    description: 'RSS Feed URL',
+                    required: true
+                },
+                {
+                    name: 'channel',
+                    type: 7,
+                    description: 'Ziel-Channel (optional)',
+                    required: false
+                }
+            ]
+        },
+        {
+            name: 'rss-list',
+            description: 'Alle RSS Feeds anzeigen'
+        },
+        {
+            name: 'rss-remove',
+            description: 'RSS Feed entfernen',
+            options: [
+                {
+                    name: 'id',
+                    type: 3,
+                    description: 'Feed ID',
+                    required: true
+                }
+            ]
+        },
+        {
+            name: 'rss-test',
+            description: 'RSS Feed testen',
+            options: [
+                {
+                    name: 'url',
+                    type: 3,
+                    description: 'RSS Feed URL',
+                    required: true
+                }
+            ]
+        },
+        {
+            name: 'rss-dashboard',
+            description: '📊 RSS Dashboard mit Buttons öffnen'
+        }
+    ];
+    
+    try {
+        await guild.commands.set(commands);
+        console.log(`Commands für ${guild.name} registriert`);
+    } catch (error) {
+        console.error('Fehler beim Registrieren der Guild Commands:', error);
+    }
+});
+
+// Slash Command Handler
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isCommand()) return;
+
+    const { commandName, options, member, guild, channel } = interaction;
+
+    // Permissions prüfen
+    if (!member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return interaction.reply({ content: 'Du benötigst die "Nachrichten verwalten" Berechtigung!', ephemeral: true });
+    }
+
+    try {
+        switch (commandName) {
+            case 'rss-dashboard':
+                const dashboardData = createDashboard(guild.id);
+                await interaction.reply(dashboardData);
+                break;
+
+            case 'rss-add':
+                const url = options.getString('url');
+                const targetChannel = options.getChannel('channel') || channel;
+                
+                // URL validieren
+                if (!url.startsWith('http')) {
+                    return interaction.reply({ content: 'Bitte gib eine gültige URL an!', ephemeral: true });
+                }
+                
+                // Prüfen ob Feed bereits existiert
+                const existingFeed = feedsData.feeds.find(f => f.url === url && f.channelId === targetChannel.id);
+                if (existingFeed) {
+                    return interaction.reply({ content: 'Dieser Feed existiert bereits in diesem Channel!', ephemeral: true });
+                }
+                
+                // Feed testen
+                await interaction.deferReply();
+                try {
+                    await parser.parseURL(url);
+                    const newFeed = addFeed(url, targetChannel.id, guild.id);
+                    await interaction.editReply(`✅ RSS Feed erfolgreich hinzugefügt!\n**URL:** ${url}\n**Channel:** <#${targetChannel.id}>\n**ID:** ${newFeed.id}`);
+                } catch (error) {
+                    await interaction.editReply(`❌ Fehler beim Hinzufügen des Feeds: ${error.message}`);
+                }
+                break;
+
+            case 'rss-list':
+                const guildFeeds = feedsData.feeds.filter(f => f.guildId === guild.id);
+                
+                if (guildFeeds.length === 0) {
+                    return interaction.reply({ content: 'Keine RSS Feeds konfiguriert.', ephemeral: true });
+                }
+                
+                const embed = new EmbedBuilder()
+                    .setTitle('RSS Feeds')
+                    .setColor(0x0099FF)
+                    .setDescription(guildFeeds.map(feed => 
+                        `**ID:** ${feed.id}\n**URL:** ${feed.url}\n**Channel:** <#${feed.channelId}>\n**Status:** ${feed.active ? '✅ Aktiv' : '❌ Inaktiv'}\n`
+                    ).join('\n'))
+                    .setFooter({ text: `${guildFeeds.length} Feed(s) total` });
+                
+                await interaction.reply({ embeds: [embed], ephemeral: true });
+                break;
+
+            case 'rss-remove':
+                const feedId = options.getString('id');
+                const feedToRemove = feedsData.feeds.find(f => f.id === feedId && f.guildId === guild.id);
+                
+                if (!feedToRemove) {
+                    return interaction.reply({ content: 'Feed nicht gefunden!', ephemeral: true });
+                }
+                
+                removeFeed(feedId);
+                await interaction.reply(`✅ RSS Feed entfernt: ${feedToRemove.url}`);
+                break;
+
+            case 'rss-test':
+                const testUrl = options.getString('url');
+                
+                if (!testUrl.startsWith('http')) {
+                    return interaction.reply({ content: 'Bitte gib eine gültige URL an!', ephemeral: true });
+                }
+                
+                await interaction.deferReply();
+                try {
+                    const testFeed = await parser.parseURL(testUrl);
+                    const latestItem = testFeed.items[0];
+                    
+                    const testEmbed = new EmbedBuilder()
+                        .setTitle('🧪 RSS Feed Test')
+                        .setColor(0x00FF00)
+                        .addFields(
+                            { name: 'Feed Titel', value: testFeed.title || 'Unbekannt', inline: true },
+                            { name: 'Items gefunden', value: testFeed.items.length.toString(), inline: true },
+                            { name: 'Letztes Item', value: latestItem ? latestItem.title : 'Keine Items', inline: false }
+                        )
+                        .setFooter({ text: 'Feed ist gültig und kann hinzugefügt werden' });
+                    
+                    await interaction.editReply({ embeds: [testEmbed] });
+                } catch (error) {
+                    await interaction.editReply(`❌ Feed-Test fehlgeschlagen: ${error.message}`);
+                }
+                break;
+        }
+    } catch (error) {
+        console.error('Fehler beim Ausführen des Commands:', error);
+        if (interaction.deferred) {
+            await interaction.editReply('❌ Ein Fehler ist aufgetreten!');
+        } else {
+            await interaction.reply({ content: '❌ Ein Fehler ist aufgetreten!', ephemeral: true });
+        }
     }
 });
 
@@ -649,131 +755,6 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-    try {
-        switch (commandName) {
-            case 'rss-dashboard':
-                const dashboardData = createDashboard(guild.id);
-                await interaction.reply(dashboardData);
-                break;
-
-            case 'rss-add':
-                const url = options.getString('url');
-                const targetChannel = options.getChannel('channel') || channel;
-                
-                // URL validieren
-                if (!url.startsWith('http')) {
-                    return interaction.reply({ content: 'Bitte gib eine gültige URL an!', ephemeral: true });
-                }
-                
-                // Prüfen ob Feed bereits existiert
-                const existingFeed = feedsData.feeds.find(f => f.url === url && f.channelId === targetChannel.id);
-                if (existingFeed) {
-                    return interaction.reply({ content: 'Dieser Feed existiert bereits in diesem Channel!', ephemeral: true });
-                }
-                
-                // Feed testen
-                await interaction.deferReply();
-                try {
-                    await parser.parseURL(url);
-                    const newFeed = addFeed(url, targetChannel.id, guild.id);
-                    await interaction.editReply(`✅ RSS Feed erfolgreich hinzugefügt!\n**URL:** ${url}\n**Channel:** <#${targetChannel.id}>\n**ID:** ${newFeed.id}`);
-                } catch (error) {
-                    await interaction.editReply(`❌ Fehler beim Hinzufügen des Feeds: ${error.message}`);
-                }
-                break;
-                const url = options.getString('url');
-                const targetChannel = options.getChannel('channel') || channel;
-                
-                // URL validieren
-                if (!url.startsWith('http')) {
-                    return interaction.reply({ content: 'Bitte gib eine gültige URL an!', ephemeral: true });
-                }
-                
-                // Prüfen ob Feed bereits existiert
-                const existingFeed = feedsData.feeds.find(f => f.url === url && f.channelId === targetChannel.id);
-                if (existingFeed) {
-                    return interaction.reply({ content: 'Dieser Feed existiert bereits in diesem Channel!', ephemeral: true });
-                }
-                
-                // Feed testen
-                await interaction.deferReply();
-                try {
-                    await parser.parseURL(url);
-                    const newFeed = addFeed(url, targetChannel.id, guild.id);
-                    await interaction.editReply(`✅ RSS Feed erfolgreich hinzugefügt!\n**URL:** ${url}\n**Channel:** <#${targetChannel.id}>\n**ID:** ${newFeed.id}`);
-                } catch (error) {
-                    await interaction.editReply(`❌ Fehler beim Hinzufügen des Feeds: ${error.message}`);
-                }
-                break;
-
-            case 'rss-list':
-                const guildFeeds = feedsData.feeds.filter(f => f.guildId === guild.id);
-                
-                if (guildFeeds.length === 0) {
-                    return interaction.reply({ content: 'Keine RSS Feeds konfiguriert.', ephemeral: true });
-                }
-                
-                const embed = new EmbedBuilder()
-                    .setTitle('RSS Feeds')
-                    .setColor(0x0099FF)
-                    .setDescription(guildFeeds.map(feed => 
-                        `**ID:** ${feed.id}\n**URL:** ${feed.url}\n**Channel:** <#${feed.channelId}>\n**Status:** ${feed.active ? '✅ Aktiv' : '❌ Inaktiv'}\n`
-                    ).join('\n'))
-                    .setFooter({ text: `${guildFeeds.length} Feed(s) total` });
-                
-                await interaction.reply({ embeds: [embed], ephemeral: true });
-                break;
-
-            case 'rss-remove':
-                const feedId = options.getString('id');
-                const feedToRemove = feedsData.feeds.find(f => f.id === feedId && f.guildId === guild.id);
-                
-                if (!feedToRemove) {
-                    return interaction.reply({ content: 'Feed nicht gefunden!', ephemeral: true });
-                }
-                
-                removeFeed(feedId);
-                await interaction.reply(`✅ RSS Feed entfernt: ${feedToRemove.url}`);
-                break;
-
-            case 'rss-test':
-                const testUrl = options.getString('url');
-                
-                if (!testUrl.startsWith('http')) {
-                    return interaction.reply({ content: 'Bitte gib eine gültige URL an!', ephemeral: true });
-                }
-                
-                await interaction.deferReply();
-                try {
-                    const testFeed = await parser.parseURL(testUrl);
-                    const latestItem = testFeed.items[0];
-                    
-                    const testEmbed = new EmbedBuilder()
-                        .setTitle('🧪 RSS Feed Test')
-                        .setColor(0x00FF00)
-                        .addFields(
-                            { name: 'Feed Titel', value: testFeed.title || 'Unbekannt', inline: true },
-                            { name: 'Items gefunden', value: testFeed.items.length.toString(), inline: true },
-                            { name: 'Letztes Item', value: latestItem ? latestItem.title : 'Keine Items', inline: false }
-                        )
-                        .setFooter({ text: 'Feed ist gültig und kann hinzugefügt werden' });
-                    
-                    await interaction.editReply({ embeds: [testEmbed] });
-                } catch (error) {
-                    await interaction.editReply(`❌ Feed-Test fehlgeschlagen: ${error.message}`);
-                }
-                break;
-        }
-    } catch (error) {
-        console.error('Fehler beim Ausführen des Commands:', error);
-        if (interaction.deferred) {
-            await interaction.editReply('❌ Ein Fehler ist aufgetreten!');
-        } else {
-            await interaction.reply({ content: '❌ Ein Fehler ist aufgetreten!', ephemeral: true });
-        }
-    }
-});
-
 // Fehlerbehandlung
 client.on('error', error => {
     console.error('Discord Client Fehler:', error);
@@ -787,7 +768,6 @@ process.on('unhandledRejection', error => {
 client.login(CONFIG.token);
 
 // Einfacher HTTP Server für Render (damit es als Web Service läuft)
-const express = require('express');
 const app = express();
 
 app.get('/', (req, res) => {
