@@ -794,4 +794,68 @@ client.on('interactionCreate', async (interaction) => {
 
                 case 'manage_role_select':
                     const feedId = interaction.values[0];
-                    const
+                    const roleModal = createRoleModal(feedId);
+                    
+                    if (!roleModal) {
+                        return interaction.reply({ 
+                            content: '❌ Feed nicht gefunden!', 
+                            flags: 64 
+                        });
+                    }
+                    
+                    await interaction.showModal(roleModal);
+                    break;
+            }
+        }
+    } catch (error) {
+        console.error('Fehler bei Button/Modal Interaction:', error);
+        if (interaction.deferred) {
+            await interaction.editReply('❌ Ein Fehler ist aufgetreten!');
+        } else {
+            await interaction.reply({ 
+                content: '❌ Ein Fehler ist aufgetreten!', 
+                flags: 64 
+            });
+        }
+    }
+});
+
+// Fehlerbehandlung
+client.on('error', error => {
+    console.error('Discord Client Fehler:', error);
+});
+
+process.on('unhandledRejection', error => {
+    console.error('Unhandled Promise Rejection:', error);
+});
+
+process.on('uncaughtException', error => {
+    console.error('Uncaught Exception:', error);
+});
+
+// Bot starten
+client.login(CONFIG.token);
+
+// Einfacher HTTP Server für Render
+const app = express();
+
+app.get('/', (req, res) => {
+    res.json({
+        status: 'online',
+        uptime: process.uptime(),
+        feeds: feedsData.feeds.length,
+        timestamp: new Date().toISOString()
+    });
+});
+
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'healthy',
+        bot: client.user ? 'connected' : 'disconnected',
+        feeds: feedsData.feeds.length
+    });
+});
+
+app.listen(CONFIG.port, () => {
+    console.log(`HTTP Server läuft auf Port ${CONFIG.port}`);
+});
