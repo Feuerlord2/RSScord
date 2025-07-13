@@ -175,6 +175,68 @@ client.once('ready', () => {
     setInterval(checkAllFeeds, CONFIG.checkInterval);
 });
 
+// Event für neue Server
+client.on('guildCreate', async (guild) => {
+    console.log(`Bot wurde zu neuem Server hinzugefügt: ${guild.name}`);
+    
+    // Commands für neuen Server registrieren
+    const commands = [
+        {
+            name: 'rss-add',
+            description: 'RSS Feed hinzufügen',
+            options: [
+                {
+                    name: 'url',
+                    type: 3,
+                    description: 'RSS Feed URL',
+                    required: true
+                },
+                {
+                    name: 'channel',
+                    type: 7,
+                    description: 'Ziel-Channel (optional)',
+                    required: false
+                }
+            ]
+        },
+        {
+            name: 'rss-list',
+            description: 'Alle RSS Feeds anzeigen'
+        },
+        {
+            name: 'rss-remove',
+            description: 'RSS Feed entfernen',
+            options: [
+                {
+                    name: 'id',
+                    type: 3,
+                    description: 'Feed ID',
+                    required: true
+                }
+            ]
+        },
+        {
+            name: 'rss-test',
+            description: 'RSS Feed testen',
+            options: [
+                {
+                    name: 'url',
+                    type: 3,
+                    description: 'RSS Feed URL',
+                    required: true
+                }
+            ]
+        }
+    ];
+    
+    try {
+        await guild.commands.set(commands);
+        console.log(`Commands für ${guild.name} registriert`);
+    } catch (error) {
+        console.error('Fehler beim Registrieren der Guild Commands:', error);
+    }
+});
+
 // Slash Commands registrieren
 client.once('ready', async () => {
     const commands = [
@@ -227,8 +289,15 @@ client.once('ready', async () => {
     ];
 
     try {
+        // Registriere Commands für alle Guilds (Server) wo der Bot ist
+        for (const guild of client.guilds.cache.values()) {
+            await guild.commands.set(commands);
+            console.log(`Slash Commands registriert für Server: ${guild.name}`);
+        }
+        
+        // Zusätzlich auch global (dauert länger, aber als Backup)
         await client.application.commands.set(commands);
-        console.log('Slash Commands registriert');
+        console.log('Globale Slash Commands registriert');
     } catch (error) {
         console.error('Fehler beim Registrieren der Commands:', error);
     }
