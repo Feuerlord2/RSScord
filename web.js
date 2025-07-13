@@ -127,6 +127,7 @@ app.get('/api/user', requireAuth, (req, res) => {
 });
 
 app.get('/api/feeds/:guildId', requireAuth, (req, res) => {
+    // Immer frische Daten laden
     loadData();
     const guildId = req.params.guildId;
     const guildFeeds = feedsData.feeds.filter(f => f.guildId === guildId);
@@ -146,7 +147,7 @@ app.post('/api/feeds', requireAuth, async (req, res) => {
             return res.status(400).json({ error: 'Ungültige URL' });
         }
         
-        // Prüfen ob Feed bereits existiert
+        // Frische Daten laden vor dem Prüfen
         loadData();
         const existingFeed = feedsData.feeds.find(f => f.url === url && f.channelId === channelId);
         if (existingFeed) {
@@ -170,6 +171,7 @@ app.post('/api/feeds', requireAuth, async (req, res) => {
         feedsData.feeds.push(newFeed);
         saveData();
         
+        console.log(`📥 Web: Feed hinzugefügt - ${url} für Guild ${guildId}`);
         res.json({ success: true, feed: newFeed });
     } catch (error) {
         console.error('Fehler beim Hinzufügen des Feeds:', error);
@@ -179,6 +181,7 @@ app.post('/api/feeds', requireAuth, async (req, res) => {
 
 app.delete('/api/feeds/:feedId', requireAuth, (req, res) => {
     try {
+        // Frische Daten laden
         loadData();
         const feedId = req.params.feedId;
         const feedIndex = feedsData.feeds.findIndex(f => f.id === feedId);
@@ -187,10 +190,12 @@ app.delete('/api/feeds/:feedId', requireAuth, (req, res) => {
             return res.status(404).json({ error: 'Feed nicht gefunden' });
         }
         
+        const deletedFeed = feedsData.feeds[feedIndex];
         feedsData.feeds.splice(feedIndex, 1);
         delete feedsData.lastItems[feedId];
         saveData();
         
+        console.log(`🗑️ Web: Feed gelöscht - ${deletedFeed.url}`);
         res.json({ success: true });
     } catch (error) {
         console.error('Fehler beim Löschen des Feeds:', error);
@@ -200,6 +205,7 @@ app.delete('/api/feeds/:feedId', requireAuth, (req, res) => {
 
 app.put('/api/feeds/:feedId', requireAuth, (req, res) => {
     try {
+        // Frische Daten laden
         loadData();
         const feedId = req.params.feedId;
         const { rolePing, active } = req.body;
@@ -209,10 +215,18 @@ app.put('/api/feeds/:feedId', requireAuth, (req, res) => {
             return res.status(404).json({ error: 'Feed nicht gefunden' });
         }
         
+        const oldState = { rolePing: feed.rolePing, active: feed.active };
+        
         if (rolePing !== undefined) feed.rolePing = rolePing;
         if (active !== undefined) feed.active = active;
         
         saveData();
+        
+        console.log(`🔄 Web: Feed aktualisiert - ${feed.url}`, { 
+            old: oldState, 
+            new: { rolePing: feed.rolePing, active: feed.active } 
+        });
+        
         res.json({ success: true, feed });
     } catch (error) {
         console.error('Fehler beim Aktualisieren des Feeds:', error);
