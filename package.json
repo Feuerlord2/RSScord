@@ -1,15 +1,26 @@
 {
   "name": "discord-rss-bot",
   "version": "1.0.0",
-  "description": "Discord RSS Bot",
+  "description": "Discord RSS Bot with Web Interface",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "web": "node web.js",
+    "dev": "concurrently \"node bot.js\" \"node web.js\""
   },
   "dependencies": {
     "discord.js": "^14.14.1",
     "rss-parser": "^3.13.0",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "passport": "^0.7.0",
+    "passport-discord": "^0.1.4",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
   },
   "engines": {
     "node": "18.x"
