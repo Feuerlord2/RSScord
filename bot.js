@@ -4,19 +4,130 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 
-// Beschreibung bereinigen
-function cleanDescription(description) {
-    if (!description) return 'Keine Beschreibung verfügbar';
+// Beschreibung bereinigen und verbessern
+function cleanDescription(description, contentEncoded = null) {
+    if (!description && !contentEncoded) return 'Keine Beschreibung verfügbar';
     
-    // HTML Tags entfernen
-    let cleaned = description.replace(/<[^>]*>/g, '');
+    // Bevorzuge content:encoded wenn verfügbar, da es meist ausführlicher ist
+    let content = contentEncoded || description;
     
-    // Auf 300 Zeichen kürzen
-    if (cleaned.length > 300) {
-        cleaned = cleaned.substring(0, 300) + '...';
+    // HTML Tags entfernen aber wichtige Formatierung beibehalten
+    let cleaned = content
+        .replace(/<br\s*\/?>/gi, '\n') // <br> zu Zeilenumbruch
+        .replace(/<\/p>/gi, '\n\n')    // </p> zu doppelter Zeilenumbruch
+        .replace(/<p[^>]*>/gi, '')     // <p> Tags entfernen
+        .replace(/<em>(.*?)<\/em>/gi, '*$1*')     // <em> zu Discord italic
+        .replace(/<strong>(.*?)<\/strong>/gi, '**$1**') // <strong> zu Discord bold
+        .replace(/<b>(.*?)<\/b>/gi, '**$1**')     // <b> zu Discord bold
+        .replace(/<i>(.*?)<\/i>/gi, '*$1*')       // <i> zu Discord italic
+        .replace(/<[^>]*>/g, '')       // Alle anderen HTML Tags entfernen
+        .replace(/&amp;/g, '&')        // HTML Entities dekodieren
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\n\s*\n\s*\n/g, '\n\n') // Mehrfache Leerzeilen reduzieren
+        .trim();
+    
+    // Auf 1000 Zeichen kürzen (Discord Embed Description Limit: 4096, aber wir wollen es lesbar halten)
+    if (cleaned.length > 1000) {
+        cleaned = cleaned.substring(0, 1000);
+        // An Wortgrenze abschneiden
+        const lastSpace = cleaned.lastIndexOf(' ');
+        if (lastSpace > 800) {
+            cleaned = cleaned.substring(0, lastSpace);
+        }
+        cleaned += '...';
     }
     
     return cleaned;
+}
+
+// Datum formatieren
+function formatDate(dateString) {
+    if (!dateString) return null;
+    
+    try {
+        const date = new Date(dateString);
+        if (isNaN(date.getTime())) return null;
+        
+        // Relative Zeit berechnen
+        const now = new Date();
+        const diffInSeconds = Math.floor((now - date) / 1000);
+        
+        if (diffInSeconds < 60) return 'Gerade eben';
+        if (diffInSeconds < 3600) return `vor ${Math.floor(diffInSeconds / 60)} Minuten`;
+        if (diffInSeconds < 86400) return `vor ${Math.floor(diffInSeconds / 3600)} Stunden`;
+        if (diffInSeconds < 604800) return `vor ${Math.floor(diffInSeconds / 86400)} Tagen`;
+        
+        // Ansonsten formatiertes Datum
+        return date.toLocaleDateString('de-DE', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch (error) {
+        return null;
+    }
+}
+
+// Bild aus Feed Item extrahieren
+function extractImage(item) {
+    // 1. Enclosure (häufig für Podcasts/Medien)
+    if (item.enclosure && item.enclosure.url && item.enclosure.type?.startsWith('image/')) {
+        return item.enclosure.url;
+    }
+    
+    // 2. Media RSS Extensions
+    if (item['media:content'] && Array.isArray(item['media:content'])) {
+        for (const media of item['media:content']) {
+            if (media.$.medium === 'image' || media.$.type?.startsWith('image/')) {
+                return media.$.url;
+            }
+        }
+    }
+    
+    // 3. Media Thumbnail
+    if (item['media:thumbnail'] && item['media:thumbnail'][0] && item['media:thumbnail'][0].$.url) {
+        return item['media:thumbnail'][0].$.url;
+    }
+    
+    // 4. Aus content:encoded oder description extrahieren
+    const content = item['content:encoded'] || item.content || item.description || '';
+    const imgMatch = content.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i);
+    if (imgMatch && imgMatch[1]) {
+        return imgMatch[1];
+    }
+    
+    return null;
+}
+
+// Farbe basierend auf Feed-URL generieren
+function generateEmbedColor(feedUrl) {
+    const colors = [
+        0x3498db, // Blau
+        0xe74c3c, // Rot
+        0x2ecc71, // Grün
+        0xf39c12, // Orange
+        0x9b59b6, // Lila
+        0x1abc9c, // Türkis
+        0xe67e22, // Dunkelorange
+        0x34495e, // Dunkelgrau
+        0xe91e63, // Pink
+        0x00bcd4  // Cyan
+    ];
+    
+    // Einfacher Hash der URL für konsistente Farben
+    let hash = 0;
+    for (let i = 0; i < feedUrl.length; i++) {
+        const char = feedUrl.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // 32bit integer konvertieren
+    }
+    
+    return colors[Math.abs(hash) % colors.length];
 }
 
 // Konfiguration
@@ -136,30 +247,127 @@ async function checkFeed(feed) {
 // Item in Discord posten
 async function postItem(channel, item, feedTitle, rolePing) {
     try {
+        // Verbesserte Beschreibung
+        const description = cleanDescription(
+            item.contentSnippet || item.description,
+            item['content:encoded'] || item.content
+        );
+        
+        // Bild extrahieren
+        const imageUrl = extractImage(item);
+        
+        // Formatiertes Datum
+        const formattedDate = formatDate(item.pubDate || item.isoDate);
+        
+        // Feed-spezifische Farbe
+        const embedColor = generateEmbedColor(feedTitle);
+        
         const embed = new EmbedBuilder()
             .setTitle(item.title || 'Kein Titel')
             .setURL(item.link || null)
-            .setDescription(cleanDescription(item.contentSnippet || item.content || 'Keine Beschreibung verfügbar'))
-            .setFooter({ text: feedTitle })
-            .setTimestamp(item.pubDate ? new Date(item.pubDate) : new Date())
-            .setColor(0x0099FF);
+            .setDescription(description)
+            .setColor(embedColor)
+            .setTimestamp(item.pubDate ? new Date(item.pubDate) : new Date());
 
-        // Thumbnail hinzufügen wenn verfügbar
-        if (item.enclosure && item.enclosure.url && item.enclosure.type?.startsWith('image/')) {
-            embed.setThumbnail(item.enclosure.url);
+        // Autor (Feed-Titel)
+        embed.setAuthor({ 
+            name: feedTitle,
+            iconURL: 'https://cdn.discordapp.com/emojis/📰.png' // RSS Icon
+        });
+
+        // Bild hinzufügen
+        if (imageUrl) {
+            // Versuche zuerst als großes Bild
+            try {
+                embed.setImage(imageUrl);
+            } catch (error) {
+                // Falls das fehlschlägt, als Thumbnail
+                try {
+                    embed.setThumbnail(imageUrl);
+                } catch (thumbError) {
+                    console.warn('Konnte Bild nicht hinzufügen:', imageUrl);
+                }
+            }
+        }
+
+        // Footer mit zusätzlichen Infos
+        const footerText = [];
+        if (formattedDate) footerText.push(`📅 ${formattedDate}`);
+        if (item.creator || item['dc:creator']) footerText.push(`✍️ ${item.creator || item['dc:creator']}`);
+        if (item.categories && item.categories.length > 0) {
+            const cats = Array.isArray(item.categories) 
+                ? item.categories.slice(0, 3).join(', ') 
+                : item.categories;
+            footerText.push(`🏷️ ${cats}`);
+        }
+        
+        if (footerText.length > 0) {
+            embed.setFooter({ text: footerText.join(' • ') });
+        }
+
+        // Zusätzliche Felder für strukturierte Daten
+        const fields = [];
+        
+        // Wenn es ein Podcast ist
+        if (item.enclosure && item.enclosure.type?.startsWith('audio/')) {
+            fields.push({
+                name: '🎧 Podcast',
+                value: `[Anhören](${item.enclosure.url})`,
+                inline: true
+            });
+        }
+        
+        // Wenn es ein Video ist
+        if (item.enclosure && item.enclosure.type?.startsWith('video/')) {
+            fields.push({
+                name: '📹 Video',
+                value: `[Anschauen](${item.enclosure.url})`,
+                inline: true
+            });
+        }
+        
+        // Dauer wenn verfügbar
+        if (item['itunes:duration']) {
+            fields.push({
+                name: '⏱️ Dauer',
+                value: item['itunes:duration'],
+                inline: true
+            });
+        }
+        
+        // GUID/ID als verstecktes Feld für Debugging (nur wenn aktiviert)
+        if (process.env.RSS_DEBUG === 'true' && item.guid) {
+            fields.push({
+                name: '🔍 ID',
+                value: `\`${item.guid.substring(0, 20)}...\``,
+                inline: true
+            });
+        }
+        
+        if (fields.length > 0) {
+            embed.addFields(fields);
         }
 
         // Rolle pinnen falls konfiguriert
         let content = null;
         if (rolePing) {
-            content = `<@&${rolePing}>`;
+            content = `🔔 <@&${rolePing}>`;
         }
 
         await channel.send({ content, embeds: [embed] });
-        console.log(`Neues Item gepostet: ${item.title} in #${channel.name}`);
+        console.log(`📰 Neues Item gepostet: "${item.title}" in #${channel.name}`);
         
     } catch (error) {
         console.error('Fehler beim Posten des Items:', error);
+        
+        // Fallback: Einfache Nachricht ohne Embed
+        try {
+            const fallbackContent = `**${item.title || 'Neuer RSS Item'}**\n${item.link || ''}\n${cleanDescription(item.description).substring(0, 200)}...`;
+            await channel.send(rolePing ? `🔔 <@&${rolePing}>\n${fallbackContent}` : fallbackContent);
+            console.log(`📝 Fallback-Post gesendet für: "${item.title}"`);
+        } catch (fallbackError) {
+            console.error('Auch Fallback-Post fehlgeschlagen:', fallbackError);
+        }
     }
 }
 
