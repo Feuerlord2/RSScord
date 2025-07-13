@@ -10,10 +10,10 @@ const Parser = require('rss-parser');
 
 // Konfiguration
 const CONFIG = {
-    port: process.env.WEB_PORT || 3001,
+    port: process.env.PORT || 3001, // Render setzt automatisch PORT
     clientId: process.env.DISCORD_CLIENT_ID,
     clientSecret: process.env.DISCORD_CLIENT_SECRET,
-    callbackUrl: process.env.CALLBACK_URL || 'http://localhost:3001/auth/discord/callback',
+    callbackUrl: process.env.CALLBACK_URL || `https://${process.env.RENDER_EXTERNAL_HOSTNAME}/auth/discord/callback`,
     sessionSecret: process.env.SESSION_SECRET || 'your-session-secret-here',
     dataFile: './feeds.json'
 };
@@ -57,18 +57,28 @@ app.use(session({
     secret: CONFIG.sessionSecret,
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } // 24 Stunden
+    cookie: { 
+        secure: process.env.NODE_ENV === 'production', // HTTPS in Production
+        maxAge: 24 * 60 * 60 * 1000, // 24 Stunden
+        httpOnly: true
+    },
+    name: 'rsscord_session'
 }));
 
 // Passport-Konfiguration
-passport.use(new DiscordStrategy({
-    clientID: CONFIG.clientId,
-    clientSecret: CONFIG.clientSecret,
-    callbackURL: CONFIG.callbackUrl,
-    scope: ['identify', 'guilds']
-}, (accessToken, refreshToken, profile, done) => {
-    return done(null, profile);
-}));
+if (CONFIG.clientId && CONFIG.clientSecret) {
+    passport.use(new DiscordStrategy({
+        clientID: CONFIG.clientId,
+        clientSecret: CONFIG.clientSecret,
+        callbackURL: CONFIG.callbackUrl,
+        scope: ['identify', 'guilds']
+    }, (accessToken, refreshToken, profile, done) => {
+        console.log(`✅ Discord OAuth successful: ${profile.username}#${profile.discriminator}`);
+        return done(null, profile);
+    }));
+} else {
+    console.error('❌ Discord OAuth nicht konfiguriert - CLIENT_ID oder CLIENT_SECRET fehlt');
+}
 
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
@@ -97,11 +107,24 @@ app.get('/dashboard', requireAuth, (req, res) => {
 });
 
 // Auth-Routes
-app.get('/auth/discord', passport.authenticate('discord'));
+app.get('/auth/discord', (req, res, next) => {
+    if (!CONFIG.clientId || !CONFIG.clientSecret) {
+        return res.status(500).send(`
+            <h1>OAuth-Konfiguration fehlt</h1>
+            <p>DISCORD_CLIENT_ID und DISCORD_CLIENT_SECRET müssen in den Environment Variables gesetzt werden.</p>
+            <p><a href="/">Zurück zur Startseite</a></p>
+        `);
+    }
+    passport.authenticate('discord')(req, res, next);
+});
 
 app.get('/auth/discord/callback',
-    passport.authenticate('discord', { failureRedirect: '/' }),
+    passport.authenticate('discord', { 
+        failureRedirect: '/?error=oauth_failed',
+        failureMessage: true 
+    }),
     (req, res) => {
+        console.log(`✅ User erfolgreich eingeloggt: ${req.user.username}`);
         res.redirect('/dashboard');
     }
 );
