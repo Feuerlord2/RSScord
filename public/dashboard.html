@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RSScord Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <i class="fas fa-rss"></i>
+            <span>RSScord</span>
+        </div>
+        
+        <div class="nav-items">
+            <div class="guild-selector">
+                <select id="guildSelect">
+                    <option value="">Server auswählen...</option>
+                </select>
+            </div>
+            
+            <div class="user-menu">
+                <img id="userAvatar" src="" alt="Avatar" class="user-avatar">
+                <span id="username"></span>
+                <a href="/auth/logout" class="logout-btn">
+                    <i class="fas fa-sign-out-alt"></i>
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="dashboard">
+        <div class="welcome-message" id="welcomeMessage">
+            <h2>Willkommen!</h2>
+            <p>Wähle einen Server aus, um deine RSS Feeds zu verwalten.</p>
+        </div>
+
+        <div class="dashboard-content" id="dashboardContent" style="display: none;">
+            <div class="dashboard-header">
+                <h2>RSS Feeds</h2>
+                <button class="btn btn-primary" id="addFeedBtn">
+                    <i class="fas fa-plus"></i>
+                    Feed hinzufügen
+                </button>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <i class="fas fa-rss"></i>
+                    <div class="stat-info">
+                        <span class="stat-number" id="totalFeeds">0</span>
+                        <span class="stat-label">Aktive Feeds</span>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <i class="fas fa-clock"></i>
+                    <div class="stat-info">
+                        <span class="stat-number">5 Min</span>
+                        <span class="stat-label">Prüfintervall</span>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <i class="fas fa-bell"></i>
+                    <div class="stat-info">
+                        <span class="stat-number" id="feedsWithRoles">0</span>
+                        <span class="stat-label">Mit Rollen-Ping</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feeds-container">
+                <div class="feeds-list" id="feedsList">
+                    <!-- Feeds werden hier dynamisch geladen -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Feed Modal -->
+    <div class="modal" id="addFeedModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>RSS Feed hinzufügen</h3>
+                <span class="close" id="closeModal">&times;</span>
+            </div>
+            
+            <form id="addFeedForm">
+                <div class="form-group">
+                    <label for="feedUrl">RSS Feed URL</label>
+                    <input type="url" id="feedUrl" required placeholder="https://example.com/feed.xml">
+                </div>
+                
+                <div class="form-group">
+                    <label for="channelId">Channel ID</label>
+                    <input type="text" id="channelId" required placeholder="123456789">
+                    <small>Rechtsklick auf Channel → "ID kopieren"</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="rolePing">Rollen-Ping (optional)</label>
+                    <input type="text" id="rolePing" placeholder="@RollenName oder Rollen-ID">
+                </div>
+                
+                <div class="form-actions">
+                    <button type="button" id="testFeedBtn" class="btn btn-secondary">
+                        <i class="fas fa-flask"></i>
+                        Feed testen
+                    </button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-plus"></i>
+                        Hinzufügen
+                    </button>
+                </div>
+            </form>
+            
+            <div id="testResult" class="test-result" style="display: none;"></div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div class="loading" id="loading" style="display: none;">
+        <i class="fas fa-spinner fa-spin"></i>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>
