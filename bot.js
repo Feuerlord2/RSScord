@@ -1,4 +1,17 @@
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, ComponentType // Beschreibung bereinigen
+function cleanDescription(description) {
+    if (!description) return 'Keine Beschreibung verfügbar';
+    
+    // HTML Tags entfernen
+    let cleaned = description.replace(/<[^>]*>/g, '');
+    
+    // Auf 300 Zeichen kürzen
+    if (cleaned.length > 300) {
+        cleaned = cleaned.substring(0, 300) + '...';
+    }
+    
+    return cleaned;
+} = require('discord.js');
 const Parser = require('rss-parser');
 const fs = require('fs');
 const path = require('path');
@@ -30,6 +43,17 @@ let feedsData = {
 
 // Daten laden
 function loadData() {
+// Slash Command Handler
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isCommand()) return;
+
+    const { commandName, options, member, guild, channel } = interaction;
+
+    // Permissions prüfen
+    if (!member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return interaction.reply({ content: 'Du benötigst die "Nachrichten verwalten" Berechtigung!', ephemeral: true });
+    }
+
     try {
         if (fs.existsSync(CONFIG.dataFile)) {
             feedsData = JSON.parse(fs.readFileSync(CONFIG.dataFile, 'utf8'));
@@ -137,19 +161,183 @@ async function postItem(channel, item, feedTitle) {
     }
 }
 
-// Beschreibung bereinigen
-function cleanDescription(description) {
-    if (!description) return 'Keine Beschreibung verfügbar';
+// Dashboard erstellen
+function createDashboard(guildId) {
+    const guildFeeds = feedsData.feeds.filter(f => f.guildId === guildId);
     
-    // HTML Tags entfernen
-    let cleaned = description.replace(/<[^>]*>/g, '');
+    const embed = new EmbedBuilder()
+        .setTitle('📊 RSS Dashboard')
+        .setDescription('Verwalte deine RSS Feeds mit den Buttons unten')
+        .setColor(0x0099FF)
+        .addFields(
+            { name: '📈 Aktive Feeds', value: guildFeeds.length.toString(), inline: true },
+            { name: '🔄 Prüfintervall', value: '5 Minuten', inline: true },
+            { name: '📝 Status', value: 'Online', inline: true }
+        )
+        .setFooter({ text: 'Nutze die Buttons zum Verwalten deiner Feeds' })
+        .setTimestamp();
+
+    // Buttons erstellen
+    const buttons = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('add_feed')
+                .setLabel('📥 Feed hinzufügen')
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId('list_feeds')
+                .setLabel('📋 Feeds anzeigen')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('test_feed')
+                .setLabel('🧪 Feed testen')
+                .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('remove_feed')
+                .setLabel('🗑️ Feed entfernen')
+                .setStyle(ButtonStyle.Danger)
+        );
+
+    return { embeds: [embed], components: [buttons] };
+}
+
+// Feed-Liste mit Select Menu erstellen
+function createFeedList(guildId) {
+    const guildFeeds = feedsData.feeds.filter(f => f.guildId === guildId);
     
-    // Auf 300 Zeichen kürzen
-    if (cleaned.length > 300) {
-        cleaned = cleaned.substring(0, 300) + '...';
+    if (guildFeeds.length === 0) {
+        const embed = new EmbedBuilder()
+            .setTitle('📋 RSS Feeds')
+            .setDescription('Keine RSS Feeds konfiguriert.')
+            .setColor(0xFF9900);
+        return { embeds: [embed], components: [] };
     }
+
+    const embed = new EmbedBuilder()
+        .setTitle('📋 RSS Feeds')
+        .setDescription(`Du hast ${guildFeeds.length} Feed(s) konfiguriert:`)
+        .setColor(0x0099FF);
+
+    // Feeds als Fields hinzufügen
+    guildFeeds.forEach((feed, index) => {
+        const channel = `<#${feed.channelId}>`;
+        const status = feed.active ? '✅ Aktiv' : '❌ Inaktiv';
+        const addedDate = new Date(feed.addedAt).toLocaleDateString('de-DE');
+        
+        embed.addFields({
+            name: `Feed ${index + 1}`,
+            value: `**URL:** ${feed.url}\n**Channel:** ${channel}\n**Status:** ${status}\n**Hinzugefügt:** ${addedDate}\n**ID:** \`${feed.id}\``,
+            inline: false
+        });
+    });
+
+    const backButton = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('dashboard')
+                .setLabel('🔙 Zurück zum Dashboard')
+                .setStyle(ButtonStyle.Secondary)
+        );
+
+    return { embeds: [embed], components: [backButton] };
+}
+
+// Modal für Feed hinzufügen
+function createAddFeedModal() {
+    const modal = new ModalBuilder()
+        .setCustomId('add_feed_modal')
+        .setTitle('📥 RSS Feed hinzufügen');
+
+    const urlInput = new TextInputBuilder()
+        .setCustomId('feed_url')
+        .setLabel('RSS Feed URL')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('https://example.com/feed.xml')
+        .setRequired(true);
+
+    const channelInput = new TextInputBuilder()
+        .setCustomId('target_channel')
+        .setLabel('Ziel-Channel (optional)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Leer lassen für aktuellen Channel')
+        .setRequired(false);
+
+    const urlRow = new ActionRowBuilder().addComponents(urlInput);
+    const channelRow = new ActionRowBuilder().addComponents(channelInput);
+
+    modal.addComponents(urlRow, channelRow);
+    return modal;
+}
+
+// Modal für Feed testen
+function createTestFeedModal() {
+    const modal = new ModalBuilder()
+        .setCustomId('test_feed_modal')
+        .setTitle('🧪 RSS Feed testen');
+
+    const urlInput = new TextInputBuilder()
+        .setCustomId('test_url')
+        .setLabel('RSS Feed URL')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('https://example.com/feed.xml')
+        .setRequired(true);
+
+    const urlRow = new ActionRowBuilder().addComponents(urlInput);
+    modal.addComponents(urlRow);
+    return modal;
+}
+
+// Select Menu für Feed entfernen
+function createRemoveFeedMenu(guildId) {
+    const guildFeeds = feedsData.feeds.filter(f => f.guildId === guildId);
     
-    return cleaned;
+    if (guildFeeds.length === 0) {
+        const embed = new EmbedBuilder()
+            .setTitle('🗑️ Feed entfernen')
+            .setDescription('Keine Feeds zum Entfernen vorhanden.')
+            .setColor(0xFF9900);
+            
+        const backButton = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('dashboard')
+                    .setLabel('🔙 Zurück zum Dashboard')
+                    .setStyle(ButtonStyle.Secondary)
+            );
+            
+        return { embeds: [embed], components: [backButton] };
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle('🗑️ Feed entfernen')
+        .setDescription('Wähle den Feed aus, den du entfernen möchtest:')
+        .setColor(0xFF4444);
+
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('remove_feed_select')
+        .setPlaceholder('Feed zum Entfernen auswählen...')
+        .addOptions(
+            guildFeeds.map(feed => {
+                const url = feed.url.length > 50 ? feed.url.substring(0, 50) + '...' : feed.url;
+                return {
+                    label: url,
+                    description: `Channel: #${feed.channelId} | ID: ${feed.id}`,
+                    value: feed.id
+                };
+            })
+        );
+
+    const selectRow = new ActionRowBuilder().addComponents(selectMenu);
+    
+    const backButton = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('dashboard')
+                .setLabel('🔙 Zurück zum Dashboard')
+                .setStyle(ButtonStyle.Secondary)
+        );
+
+    return { embeds: [embed], components: [selectRow, backButton] };
 }
 
 // Alle aktiven Feeds prüfen
@@ -285,6 +473,10 @@ client.once('ready', async () => {
                     required: true
                 }
             ]
+        },
+        {
+            name: 'rss-dashboard',
+            description: '📊 RSS Dashboard mit Buttons öffnen'
         }
     ];
 
@@ -303,20 +495,192 @@ client.once('ready', async () => {
     }
 });
 
-// Slash Command Handler
+// Button und Modal Handler
 client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isCommand()) return;
+    if (!interaction.guild) return;
 
-    const { commandName, options, member, guild, channel } = interaction;
-
-    // Permissions prüfen
-    if (!member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+    // Permissions prüfen für alle Interaktionen
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
         return interaction.reply({ content: 'Du benötigst die "Nachrichten verwalten" Berechtigung!', ephemeral: true });
     }
 
     try {
+        // Button Interactions
+        if (interaction.isButton()) {
+            switch (interaction.customId) {
+                case 'add_feed':
+                    const addModal = createAddFeedModal();
+                    await interaction.showModal(addModal);
+                    break;
+
+                case 'list_feeds':
+                    const feedList = createFeedList(interaction.guild.id);
+                    await interaction.reply({ ...feedList, ephemeral: true });
+                    break;
+
+                case 'test_feed':
+                    const testModal = createTestFeedModal();
+                    await interaction.showModal(testModal);
+                    break;
+
+                case 'remove_feed':
+                    const removeMenu = createRemoveFeedMenu(interaction.guild.id);
+                    await interaction.reply({ ...removeMenu, ephemeral: true });
+                    break;
+
+                case 'dashboard':
+                    const dashboardData = createDashboard(interaction.guild.id);
+                    await interaction.update(dashboardData);
+                    break;
+            }
+        }
+
+        // Modal Interactions
+        if (interaction.isModalSubmit()) {
+            switch (interaction.customId) {
+                case 'add_feed_modal':
+                    const feedUrl = interaction.fields.getTextInputValue('feed_url');
+                    const channelInput = interaction.fields.getTextInputValue('target_channel');
+                    
+                    let targetChannel = interaction.channel;
+                    
+                    // Channel parsing
+                    if (channelInput) {
+                        const channelMatch = channelInput.match(/^<#(\d+)>$/) || channelInput.match(/^(\d+)$/);
+                        if (channelMatch) {
+                            const foundChannel = interaction.guild.channels.cache.get(channelMatch[1]);
+                            if (foundChannel) {
+                                targetChannel = foundChannel;
+                            }
+                        }
+                    }
+                    
+                    if (!feedUrl.startsWith('http')) {
+                        return interaction.reply({ content: '❌ Bitte gib eine gültige URL an!', ephemeral: true });
+                    }
+                    
+                    const existingFeed = feedsData.feeds.find(f => f.url === feedUrl && f.channelId === targetChannel.id);
+                    if (existingFeed) {
+                        return interaction.reply({ content: '❌ Dieser Feed existiert bereits in diesem Channel!', ephemeral: true });
+                    }
+                    
+                    await interaction.deferReply({ ephemeral: true });
+                    
+                    try {
+                        await parser.parseURL(feedUrl);
+                        const newFeed = addFeed(feedUrl, targetChannel.id, interaction.guild.id);
+                        
+                        const successEmbed = new EmbedBuilder()
+                            .setTitle('✅ Feed erfolgreich hinzugefügt')
+                            .setColor(0x00FF00)
+                            .addFields(
+                                { name: 'URL', value: feedUrl, inline: false },
+                                { name: 'Channel', value: `<#${targetChannel.id}>`, inline: true },
+                                { name: 'Feed ID', value: newFeed.id, inline: true }
+                            )
+                            .setTimestamp();
+                            
+                        await interaction.editReply({ embeds: [successEmbed] });
+                    } catch (error) {
+                        await interaction.editReply({ content: `❌ Fehler beim Hinzufügen des Feeds: ${error.message}` });
+                    }
+                    break;
+
+                case 'test_feed_modal':
+                    const testUrl = interaction.fields.getTextInputValue('test_url');
+                    
+                    if (!testUrl.startsWith('http')) {
+                        return interaction.reply({ content: '❌ Bitte gib eine gültige URL an!', ephemeral: true });
+                    }
+                    
+                    await interaction.deferReply({ ephemeral: true });
+                    
+                    try {
+                        const testFeed = await parser.parseURL(testUrl);
+                        const latestItem = testFeed.items[0];
+                        
+                        const testEmbed = new EmbedBuilder()
+                            .setTitle('🧪 RSS Feed Test')
+                            .setColor(0x00FF00)
+                            .addFields(
+                                { name: 'Feed Titel', value: testFeed.title || 'Unbekannt', inline: false },
+                                { name: 'Items gefunden', value: testFeed.items.length.toString(), inline: true },
+                                { name: 'Letztes Item', value: latestItem ? latestItem.title : 'Keine Items', inline: true }
+                            )
+                            .setFooter({ text: 'Feed ist gültig und kann hinzugefügt werden' });
+                        
+                        await interaction.editReply({ embeds: [testEmbed] });
+                    } catch (error) {
+                        await interaction.editReply({ content: `❌ Feed-Test fehlgeschlagen: ${error.message}` });
+                    }
+                    break;
+            }
+        }
+
+        // Select Menu Interactions
+        if (interaction.isStringSelectMenu()) {
+            switch (interaction.customId) {
+                case 'remove_feed_select':
+                    const feedToRemove = feedsData.feeds.find(f => f.id === interaction.values[0]);
+                    
+                    if (!feedToRemove) {
+                        return interaction.reply({ content: '❌ Feed nicht gefunden!', ephemeral: true });
+                    }
+                    
+                    removeFeed(interaction.values[0]);
+                    
+                    const removeEmbed = new EmbedBuilder()
+                        .setTitle('🗑️ Feed entfernt')
+                        .setDescription(`Feed wurde erfolgreich entfernt:\n**${feedToRemove.url}**`)
+                        .setColor(0xFF4444)
+                        .setTimestamp();
+                    
+                    await interaction.reply({ embeds: [removeEmbed], ephemeral: true });
+                    break;
+            }
+        }
+    } catch (error) {
+        console.error('Fehler bei Button/Modal Interaction:', error);
+        if (interaction.deferred) {
+            await interaction.editReply('❌ Ein Fehler ist aufgetreten!');
+        } else {
+            await interaction.reply({ content: '❌ Ein Fehler ist aufgetreten!', ephemeral: true });
+        }
+    }
+});
+
+    try {
         switch (commandName) {
+            case 'rss-dashboard':
+                const dashboardData = createDashboard(guild.id);
+                await interaction.reply(dashboardData);
+                break;
+
             case 'rss-add':
+                const url = options.getString('url');
+                const targetChannel = options.getChannel('channel') || channel;
+                
+                // URL validieren
+                if (!url.startsWith('http')) {
+                    return interaction.reply({ content: 'Bitte gib eine gültige URL an!', ephemeral: true });
+                }
+                
+                // Prüfen ob Feed bereits existiert
+                const existingFeed = feedsData.feeds.find(f => f.url === url && f.channelId === targetChannel.id);
+                if (existingFeed) {
+                    return interaction.reply({ content: 'Dieser Feed existiert bereits in diesem Channel!', ephemeral: true });
+                }
+                
+                // Feed testen
+                await interaction.deferReply();
+                try {
+                    await parser.parseURL(url);
+                    const newFeed = addFeed(url, targetChannel.id, guild.id);
+                    await interaction.editReply(`✅ RSS Feed erfolgreich hinzugefügt!\n**URL:** ${url}\n**Channel:** <#${targetChannel.id}>\n**ID:** ${newFeed.id}`);
+                } catch (error) {
+                    await interaction.editReply(`❌ Fehler beim Hinzufügen des Feeds: ${error.message}`);
+                }
+                break;
                 const url = options.getString('url');
                 const targetChannel = options.getChannel('channel') || channel;
                 
