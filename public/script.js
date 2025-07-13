@@ -2,6 +2,7 @@
 let currentUser = null;
 let currentGuild = null;
 let feeds = [];
+let refreshInterval = null;
 
 // DOM Elements
 const guildSelect = document.getElementById('guildSelect');
@@ -20,6 +21,23 @@ const toastContainer = document.getElementById('toastContainer');
 document.addEventListener('DOMContentLoaded', async () => {
     await loadUser();
     setupEventListeners();
+    startAutoRefresh();
+});
+
+// Auto-refresh alle 30 Sekunden
+function startAutoRefresh() {
+    refreshInterval = setInterval(async () => {
+        if (currentGuild) {
+            await loadFeeds(true); // Silent refresh
+        }
+    }, 30000); // 30 Sekunden
+}
+
+// Cleanup bei Seitenwechsel
+window.addEventListener('beforeunload', () => {
+    if (refreshInterval) {
+        clearInterval(refreshInterval);
+    }
 });
 
 // Load user data
@@ -120,25 +138,37 @@ function showWelcomeMessage(show) {
 }
 
 // Load feeds for current guild
-async function loadFeeds() {
+async function loadFeeds(silent = false) {
     if (!currentGuild) return;
     
     try {
-        showLoading(true);
-        const response = await fetch(`/api/feeds/${currentGuild}`);
+        if (!silent) showLoading(true);
+        
+        const response = await fetch(`/api/feeds/${currentGuild}?t=${Date.now()}`); // Cache-Buster
         
         if (!response.ok) {
             throw new Error('Fehler beim Laden der Feeds');
         }
         
-        feeds = await response.json();
-        updateFeedsUI();
-        updateStats();
+        const newFeeds = await response.json();
+        
+        // Nur UI updaten wenn sich was geändert hat
+        if (!silent || JSON.stringify(feeds) !== JSON.stringify(newFeeds)) {
+            feeds = newFeeds;
+            updateFeedsUI();
+            updateStats();
+            
+            if (silent) {
+                console.log(`🔄 Auto-refresh: ${feeds.length} Feeds geladen`);
+            }
+        }
     } catch (error) {
         console.error('Error loading feeds:', error);
-        showToast('Fehler beim Laden der Feeds', 'error');
+        if (!silent) {
+            showToast('Fehler beim Laden der Feeds', 'error');
+        }
     } finally {
-        showLoading(false);
+        if (!silent) showLoading(false);
     }
 }
 
