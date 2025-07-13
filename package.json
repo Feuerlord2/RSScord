@@ -1,0 +1,17 @@
+{
+  "name": "discord-rss-bot",
+  "version": "1.0.0",
+  "description": "Discord RSS Bot",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "rss-parser": "^3.13.0",
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
