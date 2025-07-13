@@ -261,6 +261,37 @@ app.post('/api/feeds/test', requireAuth, async (req, res) => {
     }
 });
 
+// Neuer Endpoint für Live-Status
+app.get('/api/status', requireAuth, (req, res) => {
+    loadData(); // Frische Daten laden
+    
+    const totalFeeds = feedsData.feeds.length;
+    const activeFeeds = feedsData.feeds.filter(f => f.active).length;
+    const feedsWithRoles = feedsData.feeds.filter(f => f.rolePing).length;
+    
+    res.json({
+        totalFeeds,
+        activeFeeds,
+        feedsWithRoles,
+        lastUpdate: new Date().toISOString(),
+        uptime: process.uptime()
+    });
+});
+
+// Debug-Endpoint (nur für Entwicklung)
+app.get('/api/debug/feeds', requireAuth, (req, res) => {
+    if (process.env.NODE_ENV !== 'development' && process.env.RSS_DEBUG !== 'true') {
+        return res.status(404).json({ error: 'Not found' });
+    }
+    
+    loadData();
+    res.json({
+        feeds: feedsData.feeds,
+        lastItems: Object.keys(feedsData.lastItems).length,
+        timestamp: new Date().toISOString()
+    });
+});
+
 // Server starten
 loadData();
 
