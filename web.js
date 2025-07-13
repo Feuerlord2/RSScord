@@ -52,15 +52,16 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
-// Session-Management
+// Session-Management (FIX für Render.com)
 app.use(session({
     secret: CONFIG.sessionSecret,
     resave: false,
     saveUninitialized: false,
     cookie: { 
-        secure: process.env.NODE_ENV === 'production', // HTTPS in Production
+        secure: false, // WICHTIG: Auch in Production false für Render
         maxAge: 24 * 60 * 60 * 1000, // 24 Stunden
-        httpOnly: true
+        httpOnly: true,
+        sameSite: 'lax' // Wichtig für OAuth
     },
     name: 'rsscord_session'
 }));
@@ -96,14 +97,34 @@ function requireAuth(req, res, next) {
 
 // Routes
 app.get('/', (req, res) => {
+    console.log(`🏠 Hauptseite-Zugriff von Session: ${req.sessionID}`);
+    console.log(`🔐 Authentifiziert: ${req.isAuthenticated()}`);
+    
     if (req.isAuthenticated()) {
+        console.log(`👤 Bereits eingeloggt als: ${req.user.username}, redirect zu Dashboard`);
         return res.redirect('/dashboard');
     }
+    
+    // Error-Parameter aus URL lesen
+    const error = req.query.error;
+    if (error) {
+        console.log(`⚠️ Login-Fehler: ${error}`);
+    }
+    
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/dashboard', requireAuth, (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+app.get('/dashboard', (req, res) => {
+    console.log(`📊 Dashboard-Zugriff von Session: ${req.sessionID}`);
+    console.log(`🔐 Authentifiziert: ${req.isAuthenticated()}`);
+    console.log(`👤 User: ${req.user ? req.user.username : 'null'}`);
+    
+    if (req.isAuthenticated()) {
+        res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+    } else {
+        console.log('❌ Nicht authentifiziert, redirect zu Login');
+        res.redirect('/?error=not_authenticated');
+    }
 });
 
 // Auth-Routes
@@ -119,15 +140,31 @@ app.get('/auth/discord', (req, res, next) => {
 });
 
 app.get('/auth/discord/callback',
+    (req, res, next) => {
+        console.log('🔄 Discord Callback empfangen:', req.query);
+        next();
+    },
     passport.authenticate('discord', { 
         failureRedirect: '/?error=oauth_failed',
         failureMessage: true 
     }),
     (req, res) => {
-        console.log(`✅ User erfolgreich eingeloggt: ${req.user.username}`);
+        console.log(`✅ User erfolgreich eingeloggt: ${req.user.username}#${req.user.discriminator}`);
+        console.log(`🍪 Session ID: ${req.sessionID}`);
+        console.log(`🔐 User ID: ${req.user.id}`);
         res.redirect('/dashboard');
     }
 );
+
+// Debug Route für Session-Check
+app.get('/auth/check', (req, res) => {
+    res.json({
+        authenticated: req.isAuthenticated(),
+        sessionID: req.sessionID,
+        user: req.user || null,
+        session: req.session
+    });
+});
 
 app.get('/auth/logout', (req, res) => {
     req.logout((err) => {
